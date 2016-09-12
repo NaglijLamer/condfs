@@ -18,10 +18,15 @@ struct cfs_node {
 	int c_flags;
 	struct mtx c_mutex;
 	void *c_date;
+	struct vnode *vnp;
 	struct cfs_node *c_parent;
 	struct cfs_node *c_nodes;
 	struct cfs_node *c_next;
 };
+
+static int cdfs_reclaim(struct vop_reclaim_args *va){
+	return (0);
+}
 
 struct vop_vector cfs_vnodeops = {
 	.vop_default = &default_vnodeops,
@@ -40,7 +45,8 @@ struct vop_vector cfs_vnodeops = {
 	.vop_read = VOP_EOPNOTSUPP,
 	.vop_readdir = VOP_EOPNOTSUPP,
         .vop_readlink = VOP_EOPNOTSUPP,
-	.vop_reclaim = VOP_EOPNOTSUPP,
+	//.vop_reclaim = VOP_EOPNOTSUPP,
+	.vop_reclaim = cdfs_reclaim,
 	.vop_remove = VOP_EOPNOTSUPP,
 	.vop_rename = VOP_EOPNOTSUPP,
 	.vop_setattr = VOP_EOPNOTSUPP,

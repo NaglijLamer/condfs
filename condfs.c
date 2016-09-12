@@ -67,6 +67,20 @@ int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *no
 	return (0);
 }
 
+static void condfs_purge(struct cfs_node *node){
+	printf("%s\n", "before hold");
+	vhold(node->vnp);
+	printf("%s\n", "before lock");
+	VOP_LOCK(node->vnp, LK_EXCLUSIVE);
+	printf("%s\n", "before vgone");
+	vgone(node->vnp);
+	printf("%s\n", "before unlock");
+	VOP_UNLOCK(node->vnp, 0);
+	printf("%s\n", "before vdrop");
+	vdrop(node->vnp);
+	printf("%s\n", "bye purge");
+}
+
 int condfs_init(struct vfsconf *conf){
 	mtx_assert(&Giant, MA_OWNED);
 	/*Here we must make our hierarchy...*/
@@ -97,7 +111,10 @@ int condfs_mount(struct mount *mp){
 }
 
 int condfs_root(struct mount *mp, int flags, struct vnode **vpp){
-	return (condfs_alloc_vnode(mp, vpp, &root));
+	int error = condfs_alloc_vnode(mp, vpp, &root);
+	if (!error) root.vnp = *vpp;
+	return (error);
+	//return (condfs_alloc_vnode(mp, vpp, &root));
 	//return (0);
 }
 
@@ -107,11 +124,15 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
 }
 
 int condfs_uninit(struct vfsconf *conf){
+	printf("%s\n", "Ready to dead");
 	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
+	condfs_purge(&root);
+	printf("%s\n", "PURGE!");
 	return (0);
 }
 
 int condfs_unmount(struct mount *mp, int mntflags){
+	printf("%s\n", "Ready to vflush");
 	return (vflush(mp, 0, (mntflags & MNT_FORCE) ? FORCECLOSE : 0, curthread));
 }
 
