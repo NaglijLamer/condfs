@@ -38,7 +38,41 @@ static moduledata_t condfs_conf = {
 	NULL,
 };*/
 
+struct cfs_node root;
+
+int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *node){
+	int error = getnewvnode("condfs", mp, &cfs_vnodeops, vpp);
+	if (error) return (error);
+	switch (node->c_type) {
+		case cfstype_root:
+			(*vpp)->v_vflag = VV_ROOT;
+		case cfstype_dir:
+		case cfstype_this:
+		case cfstype_parent:
+			(*vpp)->v_type = VDIR;
+			break;
+		case cfstype_file:
+			(*vpp)->v_type = VREG;
+		case cfstype_none:
+		default:
+			panic("%s\n", "What the kcuf?");
+	}
+	vn_lock(*vpp, LK_EXCLUSIVE | LK_RETRY);
+	VN_LOCK_AREC(*vpp);
+	error = insmntque(*vpp, mp);
+	if (error){
+		*vpp = NULLVP;
+		return (error);
+	}
+	return (0);
+}
+
 int condfs_init(struct vfsconf *conf){
+	mtx_assert(&Giant, MA_OWNED);
+	/*Here we must make our hierarchy...*/
+	strlcpy(root.c_name, "/", sizeof(root.c_name));
+	//root.c_name = "/";
+	root.c_type = cfstype_root;
 	return (0);
 }
 
@@ -63,19 +97,22 @@ int condfs_mount(struct mount *mp){
 }
 
 int condfs_root(struct mount *mp, int flags, struct vnode **vpp){
-	return (0);
+	return (condfs_alloc_vnode(mp, vpp, &root));
+	//return (0);
 }
 
 int condfs_statfs(struct mount *mp, struct statfs *sbp){
+	/*Nothing?*/
 	return (0);
 }
 
 int condfs_uninit(struct vfsconf *conf){
+	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
 	return (0);
 }
 
 int condfs_unmount(struct mount *mp, int mntflags){
-	return (0);
+	return (vflush(mp, 0, (mntflags & MNT_FORCE) ? FORCECLOSE : 0, curthread));
 }
 
 static struct vfsops condfs_vfsops = {
