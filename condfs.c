@@ -16,6 +16,7 @@
 #include <sys/vnode.h>
 //#include <fs/pseudofs/pseudofs.h>
 #include "condfs.h"
+#include "condfs_vnops.h"
 
 /*static int cevent_handler(struct module *module, int event, void *arg){
 	switch (event){
@@ -38,44 +39,20 @@ static moduledata_t condfs_conf = {
 	NULL,
 };*/
 
+static MALLOC_DEFINE (M_CDFSN, "le", "le");
+
 struct cfs_node root;
 
-int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *node){
-	int error = getnewvnode("condfs", mp, &cfs_vnodeops, vpp);
-	if (error) return (error);
-	switch (node->c_type) {
-		case cfstype_root:
-			(*vpp)->v_vflag = VV_ROOT;
-		case cfstype_dir:
-		case cfstype_this:
-		case cfstype_parent:
-			(*vpp)->v_type = VDIR;
-			break;
-		case cfstype_file:
-			(*vpp)->v_type = VREG;
-		case cfstype_none:
-		default:
-			panic("%s\n", "What the kcuf?");
-	}
-	vn_lock(*vpp, LK_EXCLUSIVE | LK_RETRY);
-	VN_LOCK_AREC(*vpp);
-	error = insmntque(*vpp, mp);
-	if (error){
-		*vpp = NULLVP;
-		return (error);
-	}
-	return (0);
-}
-
 static void condfs_purge(struct cfs_node *node){
+	if (node->vnp == NULL) return;
 	printf("%s\n", "before hold");
 	vhold(node->vnp);
-	printf("%s\n", "before lock");
-	VOP_LOCK(node->vnp, LK_EXCLUSIVE);
+	/*printf("%s\n", "before lock");
+	VOP_LOCK(node->vnp, LK_EXCLUSIVE);*/
 	printf("%s\n", "before vgone");
 	vgone(node->vnp);
-	printf("%s\n", "before unlock");
-	VOP_UNLOCK(node->vnp, 0);
+	/*printf("%s\n", "before unlock");
+	VOP_UNLOCK(node->vnp, 0);*/
 	printf("%s\n", "before vdrop");
 	vdrop(node->vnp);
 	printf("%s\n", "bye purge");
@@ -85,8 +62,22 @@ int condfs_init(struct vfsconf *conf){
 	mtx_assert(&Giant, MA_OWNED);
 	/*Here we must make our hierarchy...*/
 	strlcpy(root.c_name, "/", sizeof(root.c_name));
-	//root.c_name = "/";
 	root.c_type = cfstype_root;
+	root.vnp = NULL;
+	struct cfs_node *this = malloc(sizeof(*this), M_CDFSN, M_WAITOK | M_ZERO);
+	strlcpy(this->c_name, ".", sizeof(this->c_name));
+	this->c_type = cfstype_this;
+	this->c_parent = &root;
+	this->c_next = root.c_nodes;
+	root.c_nodes = this;
+	
+	struct cfs_node *par = malloc(sizeof(*par), M_CDFSN, M_WAITOK | M_ZERO);
+	strlcpy(par->c_name, "..", sizeof(par->c_name));
+	par->c_type = cfstype_parent;
+	par->c_parent = &root;
+	par->c_next = root.c_nodes;
+	root.c_nodes = par;
+
 	return (0);
 }
 
@@ -111,11 +102,17 @@ int condfs_mount(struct mount *mp){
 }
 
 int condfs_root(struct mount *mp, int flags, struct vnode **vpp){
+	if (root.vnp != NULL) { 
+		printf("%d %s\n", root.vnp->v_holdcnt, "good but not"); 
+		VI_LOCK(root.vnp); 
+		vget(root.vnp, LK_EXCLUSIVE | LK_INTERLOCK, curthread);
+		*vpp = root.vnp; 
+		cache_purge(root.vnp);
+		return (0);
+	}
 	int error = condfs_alloc_vnode(mp, vpp, &root);
 	if (!error) root.vnp = *vpp;
 	return (error);
-	//return (condfs_alloc_vnode(mp, vpp, &root));
-	//return (0);
 }
 
 int condfs_statfs(struct mount *mp, struct statfs *sbp){
@@ -124,15 +121,13 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
 }
 
 int condfs_uninit(struct vfsconf *conf){
-	printf("%s\n", "Ready to dead");
 	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
-	condfs_purge(&root);
-	printf("%s\n", "PURGE!");
+	//condfs_purge(&root);
 	return (0);
 }
 
 int condfs_unmount(struct mount *mp, int mntflags){
-	printf("%s\n", "Ready to vflush");
+	root.vnp = NULL;
 	return (vflush(mp, 0, (mntflags & MNT_FORCE) ? FORCECLOSE : 0, curthread));
 }
 
