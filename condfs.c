@@ -12,8 +12,12 @@
 #include <sys/exec.h>
 #include <sys/sysproto.h>
 #include <sys/systm.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
 #include <sys/sbuf.h>
 #include <sys/vnode.h>
+#include <sys/condvar.h>
+#include <sys/sleepqueue.h>
 //#include <fs/pseudofs/pseudofs.h>
 #include "condfs.h"
 #include "condfs_vnops.h"
@@ -78,6 +82,25 @@ int condfs_init(struct vfsconf *conf){
 	par->c_next = root.c_nodes;
 	root.c_nodes = par;
 
+	struct thread *t;
+	struct proc *p = LIST_FIRST(&allproc);
+	while (p != NULL){
+		t = TAILQ_FIRST(&(p->p_threads));
+		while (t != NULL){
+			//printf("thread %d\n", t->td_tid);
+			int test = sleepq_type(t->td_wchan);
+			if (test != -1 && test & SLEEPQ_CONDVAR){
+				printf("thread %d with label %s\n", t->td_tid, t->td_wmesg);
+				if (strcmp(t->td_wmesg, "fukc") == 0){
+					printf("%s\n", "Be FReeeeeeee");
+					cv_signal((struct cv*)t->td_wchan);
+				}
+			}
+			t = TAILQ_NEXT(t, td_plist);
+		}
+		p = LIST_NEXT(p, p_list);
+	}
+
 	return (0);
 }
 
@@ -122,6 +145,8 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
 
 int condfs_uninit(struct vfsconf *conf){
 	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
+	free(root.c_nodes->c_next, M_CDFSN);
+	free(root.c_nodes, M_CDFSN);
 	//condfs_purge(&root);
 	return (0);
 }
