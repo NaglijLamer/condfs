@@ -68,19 +68,6 @@ int condfs_init(struct vfsconf *conf){
 	strlcpy(root.c_name, "/", sizeof(root.c_name));
 	root.c_type = cfstype_root;
 	root.vnp = NULL;
-	struct cfs_node *this = malloc(sizeof(*this), M_CDFSN, M_WAITOK | M_ZERO);
-	strlcpy(this->c_name, ".", sizeof(this->c_name));
-	this->c_type = cfstype_this;
-	this->c_parent = &root;
-	this->c_next = root.c_nodes;
-	root.c_nodes = this;
-	
-	struct cfs_node *par = malloc(sizeof(*par), M_CDFSN, M_WAITOK | M_ZERO);
-	strlcpy(par->c_name, "..", sizeof(par->c_name));
-	par->c_type = cfstype_parent;
-	par->c_parent = &root;
-	par->c_next = root.c_nodes;
-	root.c_nodes = par;
 
 	struct thread *t;
 	struct proc *p = LIST_FIRST(&allproc);
@@ -93,7 +80,7 @@ int condfs_init(struct vfsconf *conf){
 				printf("thread %d with label %s\n", t->td_tid, t->td_wmesg);
 				if (strcmp(t->td_wmesg, "fukc") == 0){
 					printf("%s\n", "Be FReeeeeeee");
-					cv_signal((struct cv*)t->td_wchan);
+					//cv_signal((struct cv*)t->td_wchan);
 				}
 			}
 			t = TAILQ_NEXT(t, td_plist);
@@ -121,12 +108,17 @@ int condfs_mount(struct mount *mp){
 	sbp->f_bavail = 0;
 	sbp->f_files = 1;
 	sbp->f_ffree = 0;
+	/*int error = 0;
+	error = condfs_alloc_vnode(mp, &root.vnp, &root);
+	if (error != 0) printf("%s\n", "fail");
+	error = condfs_alloc_vnode(mp, &root.condvnp, NULL);
+	if (error != 0) printf("%s\n", "fail2");*/
 	return (0);
 }
 
 int condfs_root(struct mount *mp, int flags, struct vnode **vpp){
 	if (root.vnp != NULL) { 
-		printf("%d %s\n", root.vnp->v_holdcnt, "good but not"); 
+		//printf("%d %s\n", root.vnp->v_holdcnt, "good but not"); 
 		VI_LOCK(root.vnp); 
 		vget(root.vnp, LK_EXCLUSIVE | LK_INTERLOCK, curthread);
 		*vpp = root.vnp; 
@@ -145,8 +137,8 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
 
 int condfs_uninit(struct vfsconf *conf){
 	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
-	free(root.c_nodes->c_next, M_CDFSN);
-	free(root.c_nodes, M_CDFSN);
+	//free(root.c_nodes->c_next, M_CDFSN);
+	//free(root.c_nodes, M_CDFSN);
 	//condfs_purge(&root);
 	return (0);
 }

@@ -17,6 +17,7 @@ struct cfs_node {
 	struct mtx c_mutex;
 	void *c_date;
 	struct vnode *vnp;
+	struct vnode *condvnp;
 	struct cfs_node *c_parent;
 	struct cfs_node *c_nodes;
 	struct cfs_node *c_next;
