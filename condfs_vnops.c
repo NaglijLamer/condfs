@@ -217,14 +217,19 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 	struct proc *p = NULL;
 	struct thread *t = NULL;
 	/*skip smth*/
+	/*kostyl*/
+	int kost = 1;
 	for (; offset > 0; offset -= 32){
 		if (cdfs_iterate(&p, &t) == -1){
 			sx_sunlock(&allproc_lock);
+			kost--;
+			offset -= 32;
+			if (offset <= 0) break;
 			return (0);
 		}
 	}
 
-	while (cdfs_iterate(&p, &t) != -1 && resid >= 32){
+	while (kost == 1 && (cdfs_iterate(&p, &t) != -1 && resid >= 32)){
 		if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
 			M_NOWAIT | M_ZERO)) == NULL) {
 				error = ENOMEM;
@@ -237,10 +242,40 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 		strcpy(cdfsent->entry.d_name, name);
 		cdfsent->entry.d_namlen = strlen(name);
 		/*we shoulds check type of file?? Which file?*/
+		cdfsent->entry.d_type = DT_REG;
 		STAILQ_INSERT_TAIL(&lst, cdfsent, link);
 		offset += 32;
 		resid -= 32;
 	}
+	if (kost == 1){
+		if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
+			M_NOWAIT | M_ZERO)) == NULL) 
+				return (ENOMEM);
+		cdfsent->entry.d_reclen = 32;
+		cdfsent->entry.d_fileno = 3;
+		char name[3];
+		sprintf(name, "%s", "..");
+		strcpy(cdfsent->entry.d_name, name);
+		cdfsent->entry.d_namlen = strlen(name);
+		cdfsent->entry.d_type = DT_DIR;
+		STAILQ_INSERT_TAIL(&lst, cdfsent, link);
+		offset += 32;
+		resid -= 32;
+	}
+	if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
+			M_NOWAIT | M_ZERO)) == NULL)
+				return (ENOMEM);
+	cdfsent->entry.d_reclen = 32;
+	cdfsent->entry.d_fileno = 2;
+	char name[2];
+	sprintf(name, "%s", ".");
+	strcpy(cdfsent->entry.d_name, name);
+	cdfsent->entry.d_namlen = strlen(name);
+	cdfsent->entry.d_type = DT_DIR;
+	STAILQ_INSERT_TAIL(&lst, cdfsent, link);
+	offset += 32;
+	resid -= 32;
+
 	int i = 0;
 	STAILQ_FOREACH_SAFE(cdfsent, &lst, link, cdfsent2) {
 		if (error == 0)
