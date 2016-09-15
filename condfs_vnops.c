@@ -252,11 +252,48 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 	return (error);
 }
 
+static int cdfs_read(struct vop_read_args *va){
+	printf("%s\n", "Read");
+	struct vnode *vn = va->a_vp;
+	struct sbuf *sb = NULL;
+	struct uio *uio = va->a_uio;
+	int error, thr, i;
+	off_t buflen;
+
+	if (vn->v_type != VREG)
+		return (EINVAL);
+	/*if (uio->uio_resid < 0 || uio->uio_offset < 0 ||
+		uio->uio_resid > OFF_MAX - uio->uio_offset)
+			return (EINVAL);*/
+	buflen = uio->uio_offset + uio->uio_resid;
+	if (buflen > MAXPHYS)
+		buflen = MAXPHYS;
+	sb = sbuf_new(sb, NULL, buflen + 1, 0);
+	for (thr = 0, i = 0; i < strlen((char*)(vn->v_data)); ++i)
+		thr = thr * 10 + ((char*)(vn->v_data))[i] - '0';
+	sx_slock(&allproc_lock);
+	struct proc *p = NULL;
+	struct thread *t = NULL;
+	while(cdfs_iterate(&p, &t) != -1){
+		if (thr == t->td_tid){
+			sbuf_printf(sb, "%s\n", t->td_wmesg);
+			buflen = sbuf_len(sb);
+			error = uiomove_frombuf(sbuf_data(sb), buflen, uio);
+			sbuf_delete(sb);
+			sx_sunlock(&allproc_lock);
+			return (error);
+		}
+	}
+	sbuf_delete(sb);
+	sx_sunlock(&allproc_lock);
+	return (ENOENT);
+}
+
 static int cdfs_write(struct vop_write_args *va){
 	printf("%s\n", "Write");
 	struct vnode *vn = va->a_vp;
 	struct sbuf sb;
-	struct uio *uio =va->a_uio;
+	struct uio *uio = va->a_uio;
 	int error, thr, i;
 	if (vn->v_type != VREG)
 		return (EINVAL);
@@ -323,7 +360,8 @@ struct vop_vector cfs_vnodeops = {
 	.vop_mknod = VOP_EOPNOTSUPP,
 	//.vop_open = VOP_EOPNOTSUPP,
 	.vop_open = cdfs_open,
-	.vop_read = VOP_EOPNOTSUPP,
+	//.vop_read = VOP_EOPNOTSUPP,
+	.vop_read = cdfs_read,
 	//.vop_readdir = VOP_EOPNOTSUPP,
 	.vop_readdir = cdfs_readdir,
 	.vop_readlink = VOP_EOPNOTSUPP,
