@@ -6,7 +6,6 @@
 #include <sys/mutex.h>
 #include <sys/mount.h>
 #include <sys/param.h>
-//#include <sys/module.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
@@ -18,63 +17,28 @@
 #include <sys/vnode.h>
 #include <sys/condvar.h>
 #include <sys/sleepqueue.h>
-//#include <fs/pseudofs/pseudofs.h>
 #include "condfs.h"
 #include "condfs_vnops.h"
-
-/*static int cevent_handler(struct module *module, int event, void *arg){
-	switch (event){
-		case MOD_LOAD:
-			printf("%s\n", "HOLY SHIIIIIII");
-			break;
-		case MOD_UNLOAD:
-		case MOD_SHUTDOWN:
-			printf("%s\n", "LOLE BYE");
-			break;
-		default:
-			return (EOPNOTSUPP);
-	}
-	return (0);
-}
-
-static moduledata_t condfs_conf = {
-	"condfs",
-	cevent_handler,
-	NULL,
-};*/
 
 static MALLOC_DEFINE (M_CDFSN, "le", "le");
 
 struct cfs_node root;
 
-static void condfs_purge(struct cfs_node *node){
-	if (node->vnp == NULL) return;
-	printf("%s\n", "before hold");
-	vhold(node->vnp);
-	/*printf("%s\n", "before lock");
-	VOP_LOCK(node->vnp, LK_EXCLUSIVE);*/
-	printf("%s\n", "before vgone");
-	vgone(node->vnp);
-	/*printf("%s\n", "before unlock");
-	VOP_UNLOCK(node->vnp, 0);*/
-	printf("%s\n", "before vdrop");
-	vdrop(node->vnp);
-	printf("%s\n", "bye purge");
-}
-
 int condfs_init(struct vfsconf *conf){
 	mtx_assert(&Giant, MA_OWNED);
 	/*Here we must make our hierarchy...*/
-	strlcpy(root.c_name, "/", sizeof(root.c_name));
+	//strlcpy(root.c_name, "/", sizeof(root.c_name));
 	root.c_type = cfstype_root;
 	root.vnp = NULL;
+	root.active_condvnp = 0;
+	mtx_init(&root.condvnp_mutex, "condfs vnode mutex", NULL, MTX_DEF);
+	//mtx_init(&root.readdir_mutex, "condfs readdir mutex", NULL, MTX_DEF);
 
-	struct thread *t;
+	/*struct thread *t;
 	struct proc *p = LIST_FIRST(&allproc);
 	while (p != NULL){
 		t = TAILQ_FIRST(&(p->p_threads));
 		while (t != NULL){
-			//printf("thread %d\n", t->td_tid);
 			int test = sleepq_type(t->td_wchan);
 			if (test != -1 && test & SLEEPQ_CONDVAR){
 				printf("thread %d with label %s\n", t->td_tid, t->td_wmesg);
@@ -86,7 +50,7 @@ int condfs_init(struct vfsconf *conf){
 			t = TAILQ_NEXT(t, td_plist);
 		}
 		p = LIST_NEXT(p, p_list);
-	}
+	}*/
 
 	return (0);
 }
@@ -108,17 +72,11 @@ int condfs_mount(struct mount *mp){
 	sbp->f_bavail = 0;
 	sbp->f_files = 1;
 	sbp->f_ffree = 0;
-	/*int error = 0;
-	error = condfs_alloc_vnode(mp, &root.vnp, &root);
-	if (error != 0) printf("%s\n", "fail");
-	error = condfs_alloc_vnode(mp, &root.condvnp, NULL);
-	if (error != 0) printf("%s\n", "fail2");*/
 	return (0);
 }
 
 int condfs_root(struct mount *mp, int flags, struct vnode **vpp){
 	if (root.vnp != NULL) { 
-		//printf("%d %s\n", root.vnp->v_holdcnt, "good but not"); 
 		VI_LOCK(root.vnp); 
 		vget(root.vnp, LK_EXCLUSIVE | LK_INTERLOCK, curthread);
 		*vpp = root.vnp; 
@@ -136,15 +94,17 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
 }
 
 int condfs_uninit(struct vfsconf *conf){
+	/*
+	 * Probably, we check if we has Giant lock
+	 * If not - kernel panic
+	 */ 
 	mtx_assert(&Giant, MA_OWNED); /*WHAT is THIS??*/
-	//free(root.c_nodes->c_next, M_CDFSN);
-	//free(root.c_nodes, M_CDFSN);
-	//condfs_purge(&root);
+	mtx_destroy(&root.condvnp_mutex);
 	return (0);
 }
 
 int condfs_unmount(struct mount *mp, int mntflags){
-	root.vnp = NULL;
+	root.vnp = root.condvnp = NULL;
 	return (vflush(mp, 0, (mntflags & MNT_FORCE) ? FORCECLOSE : 0, curthread));
 }
 
@@ -158,5 +118,3 @@ static struct vfsops condfs_vfsops = {
 };
 
 VFS_SET(condfs_vfsops, condfs, VFCF_SYNTHETIC | VFCF_JAIL);
-
-//DECLARE_MODULE(condfs, condfs_conf, SI_SUB_EXEC, SI_ORDER_FIRST);

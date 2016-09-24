@@ -1,5 +1,5 @@
 *
 !.gitignore
 !Makefile
-!*.c
-!*.h
+!condfs*.c
+!condfs*.h
