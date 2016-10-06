@@ -18,23 +18,26 @@
 #include <sys/condvar.h>
 #include <sys/sleepqueue.h>
 #include <sys/namei.h>
+#include <sys/limits.h>
 #include "condfs.h"
 #include "condfs_structs.h"
 #include "condfs_vnops.h"
+#include "condfs_vncache.h"
 
 struct vop_vector cfs_vnodeops;
-extern struct cfs_node root;
+//extern struct cfs_node root;
+extern struct condinode rooti;
 static MALLOC_DEFINE (M_CDFSN, "le", "le");
 
-int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *node){
-	int error = getnewvnode("condfs", mp, &cfs_vnodeops, vpp);
+//static const char* fs_name = "condfs";
+
+/*int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *node){
+	int error = getnewvnode(fs_name, mp, &cfs_vnodeops, vpp);
 	if (error) return (error);
 	if (node == NULL) {
-		//printf("%s\n", "REG");
 		(*vpp)->v_type = VREG;
 	}
 	else {
-		//printf("%s\n", "ROOT");
 		(*vpp)->v_type = VDIR;
 		(*vpp)->v_vflag = VV_ROOT;
 	}
@@ -44,52 +47,84 @@ int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct cfs_node *no
 	if (error)
 		*vpp = NULLVP;
 	return (error);
+}*/
+
+
+int test_condvar(struct thread **thr, struct condinode *inode){
+	//printf("%d %d\n", inode->tid, inode->pid);
+	if (inode->tid == -1 && inode->pid == -1) return (0);
+	if ((*thr = tdfind(inode->tid, inode->pid)) == NULL) goto bad;
+	//mtx_lock((*thr)->td_lock);
+	thread_lock(*thr);
+	int test = sleepq_type((*thr)->td_wchan);
+	if (!(test != -1 && test & SLEEPQ_CONDVAR)) {
+		//mtx_unlock((*thr)->td_lock);
+		thread_unlock(*thr);
+		goto bad;
+	}
+	return (0);
+bad:
+	//CONDFS_PURGE_CONDINODE(inode);
+	printf("%s\n", "so bad");
+	return (-1);
 }
 		
 
 static int cdfs_reclaim(struct vop_reclaim_args *va){
-	return (0);
+	printf("%d %s\n", curthread->td_tid, "Reclaim");
+	return (condfs_free_condinode(va->a_vp));
 }
 
 static int cdfs_getattr(struct vop_getattr_args *va){
-	printf("%s\n", "Getattr");
+	printf("%d %s\n", curthread->td_tid, "Getattr");
+	struct vnode *vp = va->a_vp;
+	struct condinode *inode = (struct condinode*)vp->v_data;
 	struct vattr *vap = va->a_vap;
-	vap->va_type = va->a_vp->v_type;
-	if (mtx_owned(&root.condvnp_mutex) == 0)
-		vap->va_fileid = 2;
-	else {
-		vap->va_fileid = *(int*)(va->a_vp->v_data);
-		free(va->a_vp->v_data, M_CDFSN);
-		mtx_unlock(&root.condvnp_mutex);
+	struct thread *thr = NULL;
+	if (test_condvar(&thr, inode) != 0) {
+	 	if (thr != NULL) mtx_unlock(&(thr->td_proc->p_mtx));
+		return (ENOENT);
 	}
+	vap->va_fileid = inode->tid < 0 ? 2 : inode->tid;
+	if (thr != NULL) {
+		//mtx_unlock(thr->td_lock);
+		thread_unlock(thr);
+		mtx_unlock(&(thr->td_proc->p_mtx));
+	}
+	vap->va_type = va->a_vp->v_type;
 	vap->va_flags = 0;
 	vap->va_blocksize = PAGE_SIZE;
 	vap->va_bytes = vap->va_size = 0;
 	vap->va_filerev = 0;
 	vap->va_fsid = va->a_vp->v_mount->mnt_stat.f_fsid.val[0];
-	vap->va_nlink = 1;
+	vap->va_nlink = 0;
 	nanotime(&vap->va_ctime);
 	vap->va_atime = vap->va_mtime = vap->va_ctime;
 	vap->va_mode = 0666; /*I think, I should change it*/
 	vap->va_uid = 0;
 	vap->va_gid = 0;
-	printf("%s\n", "out GETATTR");
+	printf("%d %s\n", curthread->td_tid, "out GETATTR");
 	return (0);
 }
 
 static int cdfs_open(struct vop_open_args *va){
-	printf("%s\n", "Open");
+	printf("%d %s\n", curthread->td_tid, "Open");
 	return (0);
 }
 
 static int cdfs_close(struct vop_close_args *va){
-	printf("%s\n", "Close");
+	printf("%d %s\n", curthread->td_tid, "Close");
+	/*if (mtx_owned(&root.condvnp_mutex) != 0){
+		free(root.condvnp->v_data, M_CDFSN);
+		mtx_unlock(&root.condvnp_mutex);
+		mtx_unlock(&root.condvnp_mutex);
+	}*/
 	return (0);
 }
 
 static int cdfs_access(struct vop_access_args *va){
 	/*I think it is not necessary to call vaccess()*/
-	printf("%s\n", "Access");
+	printf("%d %s\n", curthread->td_tid, "Access");
 	return (0);
 }
 
@@ -108,7 +143,11 @@ static int cdfs_iterate(struct proc **p, struct thread **t){
 			mtx_lock(&((*p)->p_mtx));
                 *t = (*t == NULL) ? TAILQ_FIRST(&((*p)->p_threads)) : TAILQ_NEXT((*t), td_plist);
                 while (*t != NULL){
+			//mtx_lock((*t)->td_lock);
+			thread_lock(*t);
                         int test = sleepq_type((*t)->td_wchan);
+			//mtx_unlock((*t)->td_lock);
+			thread_unlock(*t);
                         if (test != -1 && test & SLEEPQ_CONDVAR){
                                 /*We got condvar!*/
                                 return (0);
@@ -125,7 +164,7 @@ static int cdfs_fastlookup(struct vop_lookup_args *va){
 	struct componentname *cnp = va->a_cnp;
 	struct mount *mp;
 	int thr, i;
-	printf("%s %s\n", "FastLookup", va->a_gen.a_desc->vdesc_name);
+	printf("%d Fastlookup %s %s\n", curthread->td_tid, va->a_gen.a_desc->vdesc_name, cnp->cn_nameptr);
 	if (va->a_dvp->v_type != VDIR)
 		return (ENOTDIR);
 	if ((cnp->cn_flags & ISLASTCN) &&
@@ -134,7 +173,7 @@ static int cdfs_fastlookup(struct vop_lookup_args *va){
 	if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.'){
 		*(va->a_vpp) = va->a_dvp;
 		VREF(va->a_dvp);
-		printf("%s\n", "out LOOKUP it is a .");
+		printf("%d %s\n", curthread->td_tid, "out LOOKUP it is a .");
 		return (0);
 	}
 	mp = va->a_dvp->v_mount;
@@ -144,7 +183,33 @@ static int cdfs_fastlookup(struct vop_lookup_args *va){
 	for (thr = 0, i = 0; i < cnp->cn_namelen && isdigit(cnp->cn_nameptr[i]); ++i)
 		thr = thr * 10 + cnp->cn_nameptr[i] - '0';
 	if (i != cnp->cn_namelen) return (ENOENT);
-	if (root.condvnp != NULL){
+	printf("%d fastlookup before iterate\n", curthread->td_tid);
+	sx_slock(&allproc_lock);
+	struct proc *p = NULL;
+	struct thread *t = NULL;
+	while(cdfs_iterate(&p, &t) != -1) {
+		if (thr == t->td_tid) {
+			pid_t pid = p->p_pid;
+			lwpid_t tid = t->td_tid;
+			mtx_unlock(&(p->p_mtx));
+			sx_sunlock(&allproc_lock);
+			printf("%d fastlookup find it\n", curthread->td_tid);
+			condfs_alloc_vnode(mp, (va->a_vpp), pid, tid);
+			if (cnp->cn_flags & ISDOTDOT) {
+				vn_lock(va->a_dvp, LK_EXCLUSIVE | LK_RETRY);
+				if (va->a_dvp->v_iflag & VI_DOOMED) {
+					vput(*(va->a_vpp));
+					*(va->a_vpp) = NULL;
+					return (ENOENT);
+				}
+			}
+			return (0);
+		}
+	}
+	sx_sunlock(&allproc_lock);
+	return (ENOENT);
+
+	/*if (root.condvnp != NULL){
 		VI_LOCK(root.condvnp);
 		vget(root.condvnp, LK_EXCLUSIVE | LK_INTERLOCK, curthread);
 		*(va->a_vpp) = root.condvnp;
@@ -154,21 +219,28 @@ static int cdfs_fastlookup(struct vop_lookup_args *va){
 		condfs_alloc_vnode(mp, (va->a_vpp), NULL);
 		root.condvnp = *(va->a_vpp);
 	}
-	/*if (root.active_condvnp) free((*(va->a_vpp))->v_data, M_CDFSN);
+	if (root.active_condvnp) free((*(va->a_vpp))->v_data, M_CDFSN);
 	(*(va->a_vpp))->v_data = (char*)(malloc(sizeof(char) * 10, M_CDFSN, M_WAITOK));
 	root.active_condvnp = 1;
 	sprintf((*(va->a_vpp))->v_data, "%d", thr);*/
+	/*smth loke that*/
+
+	/*teeeEEEMP*///condfs_alloc_vnode(mp, (va->a_vpp), NULL);
+	/*(*(va->a_vpp))->v_data = (char*)(malloc(sizeof(char) * 10, M_CDFSN, M_WAITOK));
+	sprintf((*(va->a_vpp))->v_data, "%d", thr);*/
+
 	//(*(va->a_vpp))->v_data = cnp->cn_nameptr;
 	
 	/*Crazy stuff*/
-	mtx_lock(&root.condvnp_mutex);
+	/*mtx_lock(&root.condvnp_mutex);
 	(*(va->a_vpp))->v_data = (int*)(malloc(sizeof(int), M_CDFSN, M_WAITOK));
-	*(int*)((*(va->a_vpp))->v_data) = thr;
+	*(int*)((*(va->a_vpp))->v_data) = thr;*/
 
-	printf("%s\n", "out LOOKUP");
-	return (0);
+	/*printf("%s\n", "out LOOKUP");
+	return (0);*/
 }
 
+#ifdef _SLOW_LOOKUP
 //static int cdfs_lookup(struct vop_cachedlookup_args *va){
 static int cdfs_lookup(struct vop_lookup_args *va){
 	struct componentname *cnp = va->a_cnp;
@@ -248,6 +320,7 @@ static int cdfs_lookup(struct vop_lookup_args *va){
 	printf("%s\n", "out LOOKUP enoent");
 	return (ENOENT);
 }
+#endif
 
 struct cdfsentry {
 	STAILQ_ENTRY(cdfsentry) link;
@@ -262,7 +335,7 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 	off_t offset;
 	int resid;
 	int error = 0;
-	printf("%s\n", "Readdir");
+	printf("%d %s\n", curthread->td_tid, "Readdir");
 	STAILQ_INIT(&lst);
 	if (va->a_vp->v_type != VDIR)
 		return (ENOTDIR);
@@ -291,7 +364,7 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 			if (offset <= 0) break;
 			//if (offset > 0) break;
 			sx_sunlock(&allproc_lock);
-			printf("%s\n", "out READDIR nothing to read");
+			printf("%d %s\n", curthread->td_tid, "out READDIR nothing to read");
 			return (0);
 		}
 	}
@@ -354,85 +427,96 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 		i++;
 	}
 	//sx_sunlock(&allproc_lock); // well, I can do it earlier
-	printf("%s\n", "out READDIR");
+	printf("%d %s\n", curthread->td_tid, "out READDIR");
 	return (error);
 }
 
 static int cdfs_read(struct vop_read_args *va){
-	printf("%s\n", "Read");
-	struct vnode *vn = va->a_vp;
+	printf("%d %s\n", curthread->td_tid, "Read");
+	struct vnode *vp = va->a_vp;
+	struct condinode *inode = (struct condinode*)vp->v_data;
 	struct sbuf *sb = NULL;
 	struct uio *uio = va->a_uio;
-	int error, thr/*, i*/;
+	struct thread *thr = NULL;
+	int error;
 	off_t buflen;
-
-	thr = *(int*)(va->a_vp->v_data);
-	free(va->a_vp->v_data, M_CDFSN);
-	mtx_unlock(&root.condvnp_mutex);
-
-	if (vn->v_type != VREG)
+	/*if (test_condvar(&thr, inode) != 0) {
+		if (thr != NULL) mtx_unlock(&(thr->td_proc->p_mtx));
+		return (ENOENT);
+	}*/
+	if (uio->uio_resid < 0 || uio->uio_offset < 0 ||
+		uio->uio_resid > OFF_MAX - uio->uio_offset) {
+		/*mtx_unlock(thr->td_lock);
+		mtx_unlock(&(thr->td_proc->p_mtx));*/
 		return (EINVAL);
+	}
+	if (vp->v_type != VREG){
+		/*mtx_unlock(thr->td_lock);
+		mtx_unlock(&(thr->td_proc->p_mtx));*/
+		return (EINVAL);
+	}
+
 	buflen = uio->uio_offset + uio->uio_resid;
 	if (buflen > MAXPHYS)
 		buflen = MAXPHYS;
+	//printf("%s\n", "try to create buf");
 	sb = sbuf_new(sb, NULL, buflen + 1, 0);
-	/*for (thr = 0, i = 0; i < strlen((char*)(vn->v_data)); ++i)
-		thr = thr * 10 + ((char*)(vn->v_data))[i] - '0';*/
-	sx_slock(&allproc_lock);
-	struct proc *p = NULL;
-	struct thread *t = NULL;
-	while(cdfs_iterate(&p, &t) != -1){
-		if (thr == t->td_tid){
-			mtx_unlock(&(p->p_mtx));
-			sx_sunlock(&allproc_lock);
-			//sbuf_printf(sb, "%s\n", t->td_wmesg);
-			sbuf_printf(sb, "%d: %s\n", thr, t->td_wmesg);
-			buflen = sbuf_len(sb);
-			error = uiomove_frombuf(sbuf_data(sb), buflen, uio);
-			sbuf_delete(sb);
-			//mtx_unlock(&(p->p_mtx));
-			//sx_sunlock(&allproc_lock);
-			return (error);
-		}
+	//printf("%s\n", "feel buf");
+	if (test_condvar(&thr, inode) != 0) {
+		if (thr != NULL) mtx_unlock(&(thr->td_proc->p_mtx));
+		sbuf_delete(sb);
+		return (ENOENT);
 	}
+	sbuf_printf(sb, "%d: %s\n", inode->tid, thr->td_wmesg);
+	//sbuf_printf(sb, "%s\n", thr->td_wmesg);
+	//printf("%s\n", "unlock");
+	//mtx_unlock(thr->td_lock);
+	thread_unlock(thr);
+	mtx_unlock(&(thr->td_proc->p_mtx));
+	printf("%s\n", thr->td_wmesg);
+	buflen = sbuf_len(sb);
+	//printf("%s\n", "uiomove");
+	error = uiomove_frombuf(sbuf_data(sb), buflen, uio);
+	//printf("%s\n", "delete");
 	sbuf_delete(sb);
-	sx_sunlock(&allproc_lock);
-	return (ENOENT);
+	return (error);
 }
 
 static int cdfs_write(struct vop_write_args *va){
-	printf("%s\n", "Write");
-	struct vnode *vn = va->a_vp;
+	printf("%d %s\n", curthread->td_tid, "Write");
+	struct vnode *vp = va->a_vp;
+	struct condinode *inode = (struct condinode*)vp->v_data;
 	struct sbuf sb;
 	struct uio *uio = va->a_uio;
-	int error, thr, i;
-	if (vn->v_type != VREG)
+	struct thread *thr = NULL;
+	int error;
+	if (vp->v_type != VREG)
 		return (EINVAL);
+	/*if (test_condvar(&thr, inode) != 0) {
+		if (thr != NULL) mtx_unlock(&(thr->td_proc->p_mtx));
+		return (ENOENT);
+	}*/
 	sbuf_uionew(&sb, uio, &error);
-	if (error)
+	if (error){
+		/*mtx_unlock(thr->td_lock);
+		mtx_unlock(&(thr->td_proc->p_mtx));*/
 		return (error);
-	if (strcmp(sbuf_data(&sb), "signal") == 0){
-	 	for (thr = 0, i = 0; i < strlen((char*)(vn->v_data)); ++i)
-			thr = thr * 10 + ((char*)(vn->v_data))[i] - '0';
-		sx_slock(&allproc_lock);
-		struct proc *p = NULL;
-		struct thread *t = NULL;
-		while(cdfs_iterate(&p, &t) != -1){
-			if (thr == t->td_tid){
-				mtx_unlock(&(p->p_mtx));
-				sx_sunlock(&allproc_lock);
-				sbuf_delete(&sb);
-				cv_signal(t->td_wchan);
-				//mtx_unlock(&(p->p_mtx));
-				//sx_sunlock(&allproc_lock);
-				return (0);
-			}
-		}
-
 	}
+	if (strcmp(sbuf_data(&sb), "signal") == 0){
+		if (test_condvar(&thr, inode) != 0) {
+			if (thr != NULL) mtx_unlock(&(thr->td_proc->p_mtx));
+			sbuf_delete(&sb);
+			return (ENOENT);
+		}
+		cv_signal(thr->td_wchan);
+		//mtx_unlock(thr->td_lock);
+		thread_unlock(thr);
+		mtx_unlock(&(thr->td_proc->p_mtx));
+	}
+	/*mtx_unlock(thr->td_lock);
+	mtx_unlock(&(thr->td_proc->p_mtx));*/
 	sbuf_delete(&sb);
-	sx_sunlock(&allproc_lock);
-	return(ENOENT);
+	return (0);
 }
 
 static int cdfs_setattr(struct vop_setattr_args *va){
