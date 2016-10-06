@@ -1,22 +1,11 @@
-#include <sys/ctype.h>
-#include <sys/types.h>
-#include <sys/dirent.h>
 #include <sys/malloc.h>
-#include <sys/lock.h>
 #include <sys/proc.h>
-#include <sys/mutex.h>
-#include <sys/param.h>
 #include <sys/kernel.h>
-#include <sys/systm.h>
-#include <sys/exec.h>
-#include <sys/sysproto.h>
 #include <sys/vnode.h>
-#include <sys/mount.h>
 #include <sys/eventhandler.h>
-#include "condfs_vncache.h"
 #include "condfs_structs.h"
+#include "condfs_vncache.h"
 
-extern struct condinode *rooti;
 extern struct vop_vector cfs_vnodeops;
 struct condinode *taili;
 static eventhandler_tag condfs_exit_tag;
@@ -25,19 +14,15 @@ static const char *condfs_name = "condfs";
 
 static MALLOC_DEFINE (M_CDFSCONDI, "lole", "debuglole");
 
-/*Create new node in linked list rooti*/
+/*
+ * Create new node in linked list taili
+ */
 int create_condinode(struct condinode **inode, cfs_type type, struct vnode *vnp, lwpid_t tid, pid_t pid){
-	//struct condinode *inode = *pinode;
 	mtx_lock(&cache_mutex);
 	if ((type == cfstype_root && (pid != -1 || tid != -1)) ||
 		(taili == NULL && type != cfstype_root))
 			CDFS_CACHE_RET(ENOSYS);
-	/*if ((type == cfstype_root && (taili != NULL || tid != -1)) ||
-		(type != cfstype_root && (taili == NULL || tid < 0)))
-			CDFS_CACHE_RET(ENOSYS);*/
 	*inode = (struct condinode*)malloc(sizeof(struct condinode), M_CDFSCONDI, M_WAITOK);
-	/*if (*inode == NULL) 
-		CDFS_CACHE_RET(ENOMEM);*/ 
 	//Cannot return NULL, cause we use M_WAITOK
 	(*inode)->type = type;
 	(*inode)->vnp = vnp;
@@ -55,17 +40,16 @@ int create_condinode(struct condinode **inode, cfs_type type, struct vnode *vnp,
 /*
  * Get vnode for condinode.
  * First of all we check our cache.
- * If there is no vnode with this inode in cache 
+ * If there is no vnode with this condinode in cache 
  * then we should get new vnode from free list
  */
-//int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, struct condinode *inode){
 int condfs_alloc_vnode(struct mount *mp, struct vnode **vpp, pid_t pid, lwpid_t tid){
 	struct condinode *nexti;
 	struct vnode *vnp;
 	int error;
 retry:
 	mtx_lock(&cache_mutex);
-	/*Check cache*/
+	//Check cache
 	for (nexti = taili; nexti; nexti = nexti->next){
 		if (nexti->tid == tid && nexti->vnp->v_mount == mp){
 			if (nexti->pid != pid) nexti->pid = pid;
@@ -79,35 +63,28 @@ retry:
 			goto retry;
 		}
 	}
-	printf("%s\n", "Cant find");
-	//mtx_unlock(&cache_mutex); or we should check with retry2 see pseudofs
-	/*vnode not found*/
-	error = getnewvnode(condfs_name, mp, &cfs_vnodeops, vpp);
-	printf("%s\n", "Get this shit");
-	if (error) return (error);
+	//vnode not found
+	if ((error = getnewvnode(condfs_name, mp, &cfs_vnodeops, vpp))) 
+		CDFS_CACHE_RET(error);
 	if (tid < 0) (*vpp)->v_vflag = VV_ROOT;
 	(*vpp)->v_type = tid >= 0 ? VREG : VDIR;
-	printf("%s\n", "Try to create inode");
-	create_condinode(&nexti, tid >= 0 ? cfstype_file : cfstype_root, *vpp, tid, pid);
-	printf("%s\n", "create inode shit");
+	if ((error = create_condinode(&nexti, tid >= 0 ? cfstype_file : cfstype_root,
+		 *vpp, tid, pid))) CDFS_CACHE_RET(error);
 	(*vpp)->v_data = nexti;
-	if (nexti == NULL) printf("%s\n" , "problemes without ends");
-	if ((*vpp)->v_data == NULL) printf("%s\n", "soooproblemes");
-	if (taili->vnp->v_data == NULL) printf("%s\n", "problemes");
 	error = insmntque(*vpp, mp);
 	if (error != 0) {
 		taili = nexti->next;
 		taili->prev = NULL;
 		free(nexti, M_CDFSCONDI);
 		*vpp = NULLVP;
-		mtx_unlock(&cache_mutex);
-		return (error);
+		CDFS_CACHE_RET(error);
 	}
-	//mtx_unlock(&cache_mutex);
-	printf("%s\n", "out this shit");
 	CDFS_CACHE_RET(0);
 }
 
+/*
+ * Free one vnode or all vnodes which condinode->pid == pid
+ */
 void condfs_purge(struct condinode *inode, pid_t pid){
 	struct condinode *nexti;
 	struct vnode *vnp;
@@ -130,6 +107,9 @@ void condfs_purge(struct condinode *inode, pid_t pid){
 	mtx_unlock(&cache_mutex);
 }
 
+/*
+ * Free all vnodes
+ */
 void condfs_purge_all(){
 	struct condinode *nexti;
 	mtx_lock(&cache_mutex);
@@ -140,26 +120,22 @@ void condfs_purge_all(){
 	}
 	mtx_unlock(&cache_mutex);
 }
-		
+
+/*
+ * Remove condinode from cache
+ */
 int condfs_free_condinode(struct vnode *vp){
 	struct condinode *inode;
-	printf("%s\n", "Enter");
 	mtx_lock(&cache_mutex);
 	inode = (struct condinode*)(vp->v_data);
-	if (inode == NULL) printf("%s %s\n", "vbad", vp->v_tag);
-	printf("%s %d\n", "next", ((struct condinode*)(taili->vnp->v_data))->tid);
 	if (inode->next)
 		inode->next->prev = inode->prev;
-	printf("%s\n", "prev");
 	if (inode->prev)
 		inode->prev->next = inode->next;
 	else 
 		taili = inode->next;
-	printf("%s\n", "unlock");
 	mtx_unlock(&cache_mutex);
-	printf("%s\n", "freeeeee");
 	free(inode, M_CDFSCONDI);
-	printf("%s\n", "ret");
 	vp->v_data = NULL;
 	return (0);
 }
@@ -172,6 +148,9 @@ static void condfs_proccexit(void *arg, struct proc *p){
 	CONDFS_PURGE_PID(p->p_pid);
 }
 
+/*
+ * Init/uninit functions for cache
+ */
 void condfs_vncache_init(void){
 	taili = NULL;
 	mtx_init(&cache_mutex, "condfs cache mutex", NULL, MTX_DEF);

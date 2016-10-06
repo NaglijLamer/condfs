@@ -1,8 +1,6 @@
 #ifndef _CONDFS_VNCACHE_H
 #define _CONDFS_VNCACHE_H
 
-#include "condfs_structs.h"
-
 #define CDFS_CACHE_RET(retstatus) \
 	do { \
 		mtx_unlock(&cache_mutex); \
