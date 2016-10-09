@@ -62,7 +62,7 @@ int condfs_statfs(struct mount *mp, struct statfs *sbp){
  * Uninit file system cache
  */ 
 int condfs_uninit(struct vfsconf *conf){
-	printf("%s\n", "UNINIT");
+	PRINTF_DEBUG("%s\n", "UNINIT");
 	condfs_purge_all();
 	mtx_assert(&Giant, MA_OWNED); 
 	condfs_vncache_uninit();
@@ -74,7 +74,7 @@ int condfs_uninit(struct vfsconf *conf){
  * Flush all vnodes, which belong to umomting mountpoint
  */
 int condfs_unmount(struct mount *mp, int mntflags){
-	printf("%s\n", "UNMOUNT");
+	PRINTF_DEBUG("%s\n", "UNMOUNT");
 	return (vflush(mp, 0, (mntflags & MNT_FORCE) ? FORCECLOSE : 0, curthread));
 }
 
