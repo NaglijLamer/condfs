@@ -3,3 +3,4 @@
 !Makefile
 !condfs*.c
 !condfs*.h
+!*.md
