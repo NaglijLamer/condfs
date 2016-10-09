@@ -16,23 +16,29 @@ struct vop_vector cfs_vnodeops;
 
 int test_condvar(struct thread **thr, struct condinode *inode){
 	if (inode->tid == -1 && inode->pid == -1) return (0);
-	if ((*thr = tdfind(inode->tid, inode->pid)) == NULL) goto bad;
+	if ((*thr = tdfind(inode->tid, inode->pid)) == NULL) return (-1);
+		//goto bad;
 	thread_lock(*thr);
 	int test = sleepq_type((*thr)->td_wchan);
 	if (!(test != -1 && test & SLEEPQ_CONDVAR)) {
 		thread_unlock(*thr);
+		return (-1);
 		goto bad;
 	}
 	return (0);
 bad:
+	/*
+	 * If we want to call condinode_purge,
+	 * we should unlock vnode
+	 */
 	//CONDFS_PURGE_CONDINODE(inode);
-	printf("%s\n", "so bad");
 	return (-1);
 }
 		
 
 static int cdfs_reclaim(struct vop_reclaim_args *va){
-	PRINTF_DEBUG("%d %s\n", curthread->td_tid, "Reclaim");
+	PRINTF_DEBUG("%d %s %d\n", curthread->td_tid, "Reclaim",
+		 ((struct condinode*)va->a_vp->v_data)->tid);
 	return (condfs_free_condinode(va->a_vp));
 }
 
@@ -89,6 +95,7 @@ static int cdfs_iterate(struct proc **p, struct thread **t){
          * If t is NULL then get first thread.
          * If not NULL - get next.
          * If t is NULL and we not find any procs - return some error?
+	 * N.B. Call PRINTF_DEBUG can be really bad for debug
 	 */
         //PRINTF_DEBUG("%s\n", "Iterator");
 	sx_assert(&allproc_lock, SX_SLOCKED);
@@ -180,7 +187,7 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 		return (ENOTDIR);
 	offset = va->a_uio->uio_offset;
 	resid = va->a_uio->uio_resid;
-	if (offset < 0 || offset % MAGIC_SIZE != 0 || (resid && resid < MAGIC_SIZE)) /*MAGIC_SIZE? Magick!*/
+	if (offset < 0 || offset % MAGIC_SIZE != 0 || (resid && resid < MAGIC_SIZE)) 
 		return (EINVAL);
 	if (resid == 0)
 		return (0);
@@ -205,52 +212,14 @@ static int cdfs_readdir(struct vop_readdir_args *va){
 	}
 
 	while (kost == 1 && (cdfs_iterate(&p, &t) != -1 && resid >= MAGIC_SIZE)){
-		if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
-			M_NOWAIT | M_ZERO)) == NULL) {
-				error = ENOMEM;
-				break;
-		}
-		cdfsent->entry.d_reclen = MAGIC_SIZE;
-		cdfsent->entry.d_fileno = t->td_tid;
-		char name[100];
-		sprintf(name, "%d", t->td_tid);
-		strcpy(cdfsent->entry.d_name, name);
-		cdfsent->entry.d_namlen = strlen(name);
-		cdfsent->entry.d_type = DT_REG;
-		STAILQ_INSERT_TAIL(&lst, cdfsent, link);
-		offset += MAGIC_SIZE;
-		resid -= MAGIC_SIZE;
+		ADD_DIRECTORY_CDFSENTRY(t->td_tid, DT_REG, "%d", t->td_tid);
 	}
 	sx_sunlock(&allproc_lock);
 	if (kost == 1 && resid >= MAGIC_SIZE){
-		if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
-			M_NOWAIT | M_ZERO)) == NULL)
-				return (ENOMEM);
-		cdfsent->entry.d_reclen = MAGIC_SIZE;
-		cdfsent->entry.d_fileno = 3;
-		char name[3];
-		sprintf(name, "%s", "..");
-		strcpy(cdfsent->entry.d_name, name);
-		cdfsent->entry.d_namlen = strlen(name);
-		cdfsent->entry.d_type = DT_DIR;
-		STAILQ_INSERT_TAIL(&lst, cdfsent, link);
-		offset += MAGIC_SIZE;
-		resid -= MAGIC_SIZE;
+		ADD_DIRECTORY_CDFSENTRY(3, DT_DIR, "%s", "..");
 	}
 	if (resid >= MAGIC_SIZE){
-		if ((cdfsent = malloc(sizeof(struct cdfsentry), M_IOV,
-			M_NOWAIT | M_ZERO)) == NULL)
-				return (ENOMEM);
-		cdfsent->entry.d_reclen = MAGIC_SIZE;
-		cdfsent->entry.d_fileno = 2;
-		char name[2];
-		sprintf(name, "%s", ".");
-		strcpy(cdfsent->entry.d_name, name);
-		cdfsent->entry.d_namlen = strlen(name);
-		cdfsent->entry.d_type = DT_DIR;
-		STAILQ_INSERT_TAIL(&lst, cdfsent, link);
-		offset += MAGIC_SIZE;
-		resid -= MAGIC_SIZE;
+		ADD_DIRECTORY_CDFSENTRY(2, DT_DIR, "%s", ".");
 	}
 
 	int i = 0;
@@ -305,6 +274,7 @@ static int cdfs_write(struct vop_write_args *va){
 	struct sbuf sb;
 	struct uio *uio = va->a_uio;
 	struct thread *thr = NULL;
+	struct cv *cvp;
 	int error;
 	if (vp->v_type != VREG)
 		return (EINVAL);
@@ -316,9 +286,10 @@ static int cdfs_write(struct vop_write_args *va){
 			sbuf_delete(&sb);
 			return (ENOENT);
 		}
-		cv_signal(thr->td_wchan);
+		cvp = thr->td_wchan;
 		thread_unlock(thr);
 		PROC_UNLOCK(thr->td_proc);
+		cv_signal(cvp);
 	}
 	sbuf_delete(&sb);
 	return (0);

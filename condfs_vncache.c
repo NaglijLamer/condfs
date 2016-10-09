@@ -52,7 +52,7 @@ retry:
 	//Check cache
 	for (nexti = taili; nexti; nexti = nexti->next){
 		if (nexti->tid == tid && nexti->vnp->v_mount == mp){
-			if (nexti->pid != pid) nexti->pid = pid;
+			if (nexti->pid != pid) nexti->pid = pid; /*continue;*/
 			vnp = nexti->vnp;
 			VI_LOCK(vnp);
 			mtx_unlock(&cache_mutex);
@@ -88,6 +88,7 @@ retry:
 void condfs_purge(struct condinode *inode, pid_t pid){
 	struct condinode *nexti;
 	struct vnode *vnp;
+	PRINTF_DEBUG("%d %s\n", curthread->td_tid, "Purge");
 	mtx_lock(&cache_mutex);
 	nexti = taili;
 	while (nexti != NULL){
@@ -101,6 +102,7 @@ void condfs_purge(struct condinode *inode, pid_t pid){
 			mtx_lock(&cache_mutex);
 			vdrop(vnp);
 			nexti = taili;
+			PRINTF_DEBUG("%d %s\n", curthread->td_tid, "Purge success");
 		}
 		else nexti = nexti->next;
 	}
